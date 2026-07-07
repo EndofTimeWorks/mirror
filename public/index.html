@@ -156,6 +156,7 @@
 
         pc.onicecandidate = (event) => {
           if (event.candidate) {
+           console.log("Candidate:", event.candidate.candidate.split(" ")[4]);
             ws.send(
               JSON.stringify({
                 type: "ice",
