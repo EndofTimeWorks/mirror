@@ -27,6 +27,11 @@
         <button id="btn-ping" onclick="sendPing()" disabled>3. Test Ping</button>
     </div>
 
+    <div class="btn-grpup">
+        <button id="btn-reset" onclick="resetConnection()">Forcibly Reset Connection (Use in case of something getting stuck)</button>
+    </div>
+
+    <!-- TODO: Make CSS be all in a style block, not directly applied like this. /!-->
     <div id="settings" style="margin-top: 20px; border: 1px solid #ccc; padding: 10px; display: inline-block; border-radius: 8px;">
         <h3>Settings</h3>
         <label>Resolution:</label>
@@ -152,6 +157,7 @@
 
         function disableButtons() {
             document.querySelectorAll('button').forEach(b => b.disabled = true);
+            document.getElementById('btn-reset').disabled = false;
         }
 
         function noWSButtons() {
