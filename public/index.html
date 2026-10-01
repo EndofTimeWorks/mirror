@@ -20,13 +20,15 @@
       #video-container {
         width: 100%;
         height: 100%;
-        display: flex;
-        justify-content: center;
-        align-items: center;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        grid-auto-rows: minmax(0, 1fr);
       }
       video {
         width: 100%;
         height: 100%;
+        min-width: 0;
+        min-height: 0;
         object-fit: contain;
       }
       #status {
@@ -71,15 +73,12 @@
       <a id="link" href="#" target="_blank">Loading...</a>
     </div>
 
-    <div id="video-container" style="display: none">
-      <video id="remoteVideo" autoplay playsinline muted></video>
-    </div>
+    <div id="video-container" style="display: none"></div>
 
     <script>
       const statusEl = document.getElementById("status");
       const qrContainer = document.getElementById("qr-container");
       const videoContainer = document.getElementById("video-container");
-      const remoteVideo = document.getElementById("remoteVideo");
       const linkEl = document.getElementById("link");
       const qrImg = document.getElementById("qr-img");
 
@@ -121,9 +120,9 @@
               console.log("RX Offer");
               statusEl.innerText = "Received Offer. Signaling...";
               qrContainer.style.display = "none";
-              videoContainer.style.display = "flex";
+              videoContainer.style.display = "grid";
 
-              setupPeerConnection();
+              if (!pc) setupPeerConnection();
               await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 
               const answer = await pc.createAnswer();
@@ -133,7 +132,11 @@
                   type: "answer",
                   sdp: answer,
               }));
-              statusEl.innerText = "Sent Answer. Waiting for ICE...";
+              if (pc.connectionState === "connected") {
+                updateReceivingStatus();
+              } else {
+                statusEl.innerText = "Answer sent. Connecting...";
+              }
 
             } else if (data.type === "ice") {
               if (pc) {
@@ -151,7 +154,22 @@
         pc = new RTCPeerConnection(config);
 
         pc.ontrack = (event) => {
-          remoteVideo.srcObject = event.streams[0];
+          const stream = event.streams[0];
+          if (!stream || document.querySelector(`video[data-stream-id="${stream.id}"]`)) return;
+
+          const video = document.createElement("video");
+          video.autoplay = true;
+          video.playsInline = true;
+          video.muted = true;
+          video.dataset.streamId = stream.id;
+          video.srcObject = stream;
+          videoContainer.appendChild(video);
+
+          event.track.onended = () => {
+            video.remove();
+            updateReceivingStatus();
+          };
+          updateReceivingStatus();
         };
 
         pc.onicecandidate = (event) => {
@@ -167,8 +185,17 @@
         };
 
         pc.onconnectionstatechange = () => {
-          statusEl.innerText = `Connection: ${pc.connectionState}`;
+          if (pc.connectionState === "connected") {
+            updateReceivingStatus();
+          } else {
+            statusEl.innerText = `Connection: ${pc.connectionState}`;
+          }
         };
+      }
+
+      function updateReceivingStatus() {
+        const count = videoContainer.querySelectorAll("video").length;
+        statusEl.innerText = `Connected — receiving ${count} ${count === 1 ? "source" : "sources"}.`;
       }
 
       start();

@@ -19,7 +19,7 @@
     <h1>Mirror Sender</h1>
     <div id="status">Ready</div>
     <div id="session-info" style="font-size:0.8em; color:#888;"></div>
-    
+
     <div class="btn-group">
         <button id="btn-connect" onclick="connectWS()">1. Connect Server</button>
         <button id="btn-screen" onclick="startSharing('screen')" disabled>2. Share Screen</button>
@@ -68,42 +68,42 @@
 
         let pc;
         let ws;
-        let stream;
+        let streams = [];
         const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
         if (!sessionId) {
             statusEl.innerText = "Error: No Session ID.";
         }
-        
+
         function connectWS() {
              statusEl.innerText = "Connecting WS...";
              const host = window.location.host;
              const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
              const wsUrl = `${protocol}://${host}/ws?id=${sessionId}&role=sender`;
              console.log("Connecting to:", wsUrl);
-             
+
              ws = new WebSocket(wsUrl);
-             
+
              ws.onopen = () => {
                  statusEl.innerText = "WS Connected! Now share media.";
                  console.log("WS Open");
                  closeStream();
                  shareButtons();
              };
-             
+
              ws.onclose = () => {
                  statusEl.innerText = "WS Closed (Signaling only). Video persists.";
                  noWSButtons();
                  document.getElementById('btn-connect').disabled = false;
                  console.log("WS Closed");
              };
-             
+
              ws.onmessage = async (msg) => {
                  console.log("RX:", msg.data);
                  const data = JSON.parse(msg.data);
                  if (data.type === 'answer') {
-                      statusEl.innerText += "\nGot Answer. Finalizing...";
                       await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                      updateSharingStatus();
                  } else if (data.type === 'ice') {
                       if (pc) await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
                  }
@@ -117,12 +117,12 @@
                     alert("Must connect to server first!");
                     return;
                 }
-                
+
                 statusEl.innerText = "Requesting Media...";
 
                 const resHeight = parseInt(document.getElementById('sel-res').value);
                 const fps = parseInt(document.getElementById('sel-fps').value);
-                
+
                 const constraints = {
                     video: {
                         height: { ideal: resHeight },
@@ -131,6 +131,7 @@
                     audio: false
                 };
 
+                let stream;
                 if (mode === 'screen') {
                     if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
                          throw new Error("Screen sharing not supported on this device/browser.");
@@ -143,10 +144,20 @@
                     stream = await navigator.mediaDevices.getUserMedia(constraints);
                 }
 
-                statusEl.innerText = "Captured. Starting WebRTC...";
-                disableButtons();
+                streams.push(stream);
 
-                await setupPeerConnection();
+                if (pc) {
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                    configureAddedStream(stream);
+                    stream.getVideoTracks()[0].onended = () => handleStreamEnded(stream);
+                    await createOffer();
+                    shareButtons();
+                    return;
+                }
+
+                statusEl.innerText = "Captured. Starting WebRTC...";
+                await setupPeerConnection(stream);
+                shareButtons();
 
             } catch (err) {
                 console.error(err);
@@ -166,20 +177,46 @@
         }
 
         function shareButtons() {
-             document.getElementById('btn-screen').disabled = false;
+             const screenButton = document.getElementById('btn-screen');
+             screenButton.disabled = false;
+             screenButton.innerText = streams.length > 0 ? "+ Add Another Screen" : "2. Share Screen";
              document.getElementById('btn-camera').disabled = false;
              document.getElementById('btn-ping').disabled = false;
              document.getElementById('btn-connect').disabled = true;
         }
 
+        function updateSharingStatus() {
+            if (!pc) return;
+            const count = streams.length;
+            if (pc.connectionState === 'connected') {
+                statusEl.innerText = `Connected - sharing ${count} ${count === 1 ? 'source' : 'sources'}.`;
+            } else {
+                statusEl.innerText = `Negotiating ${count} ${count === 1 ? 'source' : 'sources'}...`;
+            }
+        }
+
+        async function handleStreamEnded(stream) {
+            streams = streams.filter(s => s !== stream);
+            stream.getTracks().forEach(track => {
+                const sender = pc?.getSenders().find(s => s.track === track);
+                if (sender) pc.removeTrack(sender);
+                track.stop();
+            });
+
+            shareButtons();
+            if (pc && ws && ws.readyState === WebSocket.OPEN) {
+                await createOffer();
+            }
+            updateSharingStatus();
+        }
+
         function closeStream() {
             if (pc) pc.close();
-            if (stream && stream.getTracks()) {
-                const tracks = stream.getTracks();
-                for (let i=0; i < tracks.length; i++) {
-                    tracks[i].stop()
-                }
-            }
+            pc = null;
+            streams.forEach(stream => {
+                stream.getTracks().forEach(track => track.stop());
+            });
+            streams = [];
         }
 
         function resetConnection() {
@@ -188,9 +225,9 @@
             noWSButtons();
         }
 
-        async function setupPeerConnection() {
+        async function setupPeerConnection(stream) {
             pc = new RTCPeerConnection(config);
-            
+
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
             try {
@@ -219,12 +256,12 @@
                     if (transceiver.sender.track && transceiver.sender.track.kind === 'video') {
                         const capabilities = RTCRtpSender.getCapabilities('video');
                         if (capabilities) {
-                            const h264Codecs = capabilities.codecs.filter(c => 
-                                c.mimeType === 'video/H264' && 
+                            const h264Codecs = capabilities.codecs.filter(c =>
+                                c.mimeType === 'video/H264' &&
                                 (c.sdpFmtpLine || "").includes("packetization-mode=1")
                             );
                             const otherCodecs = capabilities.codecs.filter(c => c.mimeType !== 'video/H264');
-                            
+
                             if (h264Codecs.length > 0) {
                                 console.log("Forcing H.264 Preference");
                                 transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
@@ -248,32 +285,65 @@
                     }));
                 }
             };
-            
+
             pc.onconnectionstatechange = () => {
-                statusEl.innerText = `ICE State: ${pc.connectionState}`;
-                console.log("ICE State:", pc.connectionState);
-				if (pc.connectionState == "failed") {
+                console.log("Connection state:", pc.connectionState);
+                if (pc.connectionState == "failed") {
                     resetConnection();
+                } else {
+                    updateSharingStatus();
                 }
             };
-            stream.getVideoTracks()[0].onended = () => {
-                statusEl.innerText = "Sharing stopped by user.";
-                resetConnection();
-            };
+            stream.getVideoTracks()[0].onended = () => handleStreamEnded(stream);
 
             createOffer();
+        }
+
+
+        function configureAddedStream(stream) {
+            try {
+                bitrateSafeguard();
+                const bitrateMbps = parseFloat(bitrateEl.value);
+                const capabilities = RTCRtpSender.getCapabilities('video');
+
+                stream.getVideoTracks().forEach(track => {
+                    const transceiver = pc.getTransceivers().find(t => t.sender.track === track);
+                    if (!transceiver) return;
+
+                    if (bitrateMbps && bitrateMbps > 0) {
+                        const params = transceiver.sender.getParameters();
+                        if (!params.encodings) params.encodings = [{}];
+                        params.encodings[0].maxBitrate = bitrateMbps * 1000 * 1000;
+                        transceiver.sender.setParameters(params)
+                            .catch(e => console.warn("Bitrate Limit Failed:", e));
+                    }
+
+                    if (capabilities) {
+                        const h264Codecs = capabilities.codecs.filter(c =>
+                            c.mimeType === 'video/H264' &&
+                            (c.sdpFmtpLine || "").includes("packetization-mode=1")
+                        );
+                        const otherCodecs = capabilities.codecs.filter(c => c.mimeType !== 'video/H264');
+                        if (h264Codecs.length > 0) {
+                            transceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error("Added stream config error:", e);
+            }
         }
 
         async function createOffer() {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            
+
             ws.send(JSON.stringify({
                 type: 'offer',
                 sdp: offer
             }));
-            
-            statusEl.innerText = "Offer sent (720p). Waiting for Answer...";
+
+            statusEl.innerText = "Offer sent. Waiting for receiver...";
         }
 
         function sendPing() {
@@ -284,7 +354,7 @@
                  statusEl.innerText = "WS not connected.";
             }
         }
-        
+
         if(sessionId) document.getElementById('session-info').innerText = "Session: " + sessionId;
     </script>
 </body>
