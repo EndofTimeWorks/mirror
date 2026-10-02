@@ -23,13 +23,57 @@
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
         grid-auto-rows: minmax(0, 1fr);
+        gap: 6px;
+        padding: 6px;
+        box-sizing: border-box;
       }
-      video {
+      .screen-tile {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        background: #111;
+        overflow: hidden;
+        cursor: grab;
+      }
+      .screen-tile.dragging {
+        opacity: 0.45;
+      }
+      .screen-tile.drag-target {
+        outline: 3px solid #4af;
+        outline-offset: -3px;
+      }
+      .screen-tile video {
         width: 100%;
         height: 100%;
         min-width: 0;
         min-height: 0;
         object-fit: contain;
+        pointer-events: none;
+      }
+      .screen-label {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.65);
+        font-size: 0.85rem;
+        pointer-events: none;
+      }
+      #layout-controls {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 9999;
+        display: none;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.65);
+      }
+      #layout-controls select {
+        font: inherit;
       }
       #status {
         position: absolute;
@@ -56,6 +100,18 @@
   <body>
     <div id="status">Connecting...</div>
 
+    <div id="layout-controls">
+      <span>Layout</span>
+      <select id="column-count" aria-label="Screen columns">
+        <option value="auto">Auto</option>
+        <option value="1">1 column</option>
+        <option value="2">2 columns</option>
+        <option value="3">3 columns</option>
+        <option value="4">4 columns</option>
+      </select>
+      <span>Drag screens to reorder</span>
+    </div>
+
     <div id="qr-container">
       <h1>Scan to Cast</h1>
       <img
@@ -81,6 +137,8 @@
       const videoContainer = document.getElementById("video-container");
       const linkEl = document.getElementById("link");
       const qrImg = document.getElementById("qr-img");
+      const layoutControls = document.getElementById("layout-controls");
+      const columnCount = document.getElementById("column-count");
 
       let pc;
       let ws;
@@ -121,6 +179,7 @@
               statusEl.innerText = "Received Offer. Signaling...";
               qrContainer.style.display = "none";
               videoContainer.style.display = "grid";
+              layoutControls.style.display = "flex";
 
               if (!pc) setupPeerConnection();
               await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
@@ -155,18 +214,69 @@
 
         pc.ontrack = (event) => {
           const stream = event.streams[0];
-          if (!stream || document.querySelector(`video[data-stream-id="${stream.id}"]`)) return;
+          if (!stream || document.querySelector(`[data-stream-id="${stream.id}"]`)) return;
+
+          const tile = document.createElement("div");
+          tile.className = "screen-tile";
+          tile.draggable = true;
+          tile.dataset.streamId = stream.id;
 
           const video = document.createElement("video");
           video.autoplay = true;
           video.playsInline = true;
           video.muted = true;
-          video.dataset.streamId = stream.id;
           video.srcObject = stream;
-          videoContainer.appendChild(video);
+
+          const label = document.createElement("div");
+          label.className = "screen-label";
+
+          tile.append(video, label);
+          videoContainer.appendChild(tile);
+          refreshScreenLabels();
+
+          tile.addEventListener("dragstart", () => {
+            tile.classList.add("dragging");
+          });
+
+          tile.addEventListener("dragend", () => {
+            tile.classList.remove("dragging");
+            videoContainer.querySelectorAll(".drag-target").forEach((el) =>
+              el.classList.remove("drag-target")
+            );
+            refreshScreenLabels();
+          });
+
+          tile.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            if (!tile.classList.contains("dragging")) {
+              tile.classList.add("drag-target");
+            }
+          });
+
+          tile.addEventListener("dragleave", () => {
+            tile.classList.remove("drag-target");
+          });
+
+          tile.addEventListener("drop", (event) => {
+            event.preventDefault();
+            tile.classList.remove("drag-target");
+
+            const dragged = videoContainer.querySelector(".dragging");
+            if (!dragged || dragged === tile) return;
+
+            const rect = tile.getBoundingClientRect();
+            const before =
+              event.clientY < rect.top + rect.height / 2 ||
+              (Math.abs(event.clientY - (rect.top + rect.height / 2)) < rect.height / 4 &&
+                event.clientX < rect.left + rect.width / 2);
+
+            videoContainer.insertBefore(dragged, before ? tile : tile.nextSibling);
+            refreshScreenLabels();
+          });
 
           event.track.onended = () => {
-            video.remove();
+            tile.remove();
+            refreshScreenLabels();
             updateReceivingStatus();
           };
           updateReceivingStatus();
@@ -193,10 +303,23 @@
         };
       }
 
+      function refreshScreenLabels() {
+        videoContainer.querySelectorAll(".screen-tile").forEach((tile, index) => {
+          tile.querySelector(".screen-label").innerText = `Screen ${index + 1}`;
+        });
+      }
+
       function updateReceivingStatus() {
-        const count = videoContainer.querySelectorAll("video").length;
+        const count = videoContainer.querySelectorAll(".screen-tile").length;
         statusEl.innerText = `Connected — receiving ${count} ${count === 1 ? "source" : "sources"}.`;
       }
+
+      columnCount.addEventListener("change", () => {
+        videoContainer.style.gridTemplateColumns =
+          columnCount.value === "auto"
+            ? "repeat(auto-fit, minmax(320px, 1fr))"
+            : `repeat(${columnCount.value}, minmax(0, 1fr))`;
+      });
 
       start();
     </script>
